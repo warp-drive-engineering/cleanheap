@@ -1,13 +1,13 @@
 {
   "name": "cleanheap",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A tool for scrubbing Weak retainer paths from a heap snapshot",
   "main": "src/index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "bin": {
-    "cleanheap": "./bin/cleanheap"
+    "cleanheap": "./cleanheap"
   },
   "keywords": ["v8", "chrome", "heapdump", "heapsnapshot", "memory", "memory-leak"],
   "author": "Chris Thoborn (@runspired) <runspired@gmail.com>",
