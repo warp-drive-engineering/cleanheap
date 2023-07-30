@@ -35,7 +35,7 @@ bun run src/index.ts
 To compile:
 
 ```bash
-bun build src/index.ts --outfile bin/cleanheap
+bun build src/index.ts --compile --outfile cleanheap
 ```
 
 ## Credits
