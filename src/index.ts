@@ -103,8 +103,8 @@ class Snapshot {
         const nodes = this.data.nodes;
         const nodeFields = this.data.snapshot.meta.node_fields;
         const fieldSliceSize = nodeFields.length;
-        const edgeCount = this.data.snapshot.edge_count;
         const edgeFieldsCount = this.data.snapshot.meta.edge_fields.length;
+        const edgeCount = this.nodeOffsets.edge_count;
         const data = this.data;
 
         // first pass, null any edges that are weak retainers
@@ -113,9 +113,10 @@ class Snapshot {
             nodes.length,
             fieldSliceSize,
             (startOffset: number, endOffset: number) => {
-                const start = nextEdgeIndex
-                const ownedEdgeCount = getField(nodes, startOffset, edgeCount);
-                nextEdgeIndex = nextEdgeIndex + ownedEdgeCount + edgeFieldsCount;
+                const start = nextEdgeIndex;
+                const ownedEdgeCount = nodes[startOffset + edgeCount];
+
+                nextEdgeIndex = nextEdgeIndex + ownedEdgeCount * edgeFieldsCount;
                 totalObjects++;
 
                 const nodeName = getNodeName(this, startOffset);
@@ -130,7 +131,8 @@ class Snapshot {
         );
 
         // second pass, remove any edges that are null
-        this.data.edges = this.data.edges.filter((v: number | null) => v !== null);;
+        // this is handled during serialization for performance reasons
+        // this.data.edges = this.data.edges.filter((v: number | null) => v !== null);;
 
         if (weakRetainers > 0) {
             logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Removed ${chalk.magenta(weakRetainers)} of ${chalk.magenta(totalObjects)} total traversed.`));
@@ -145,6 +147,9 @@ function cleanupRetainers(data: HeapSnapshot, edgeCount: number, startOffset: nu
     iterateBySlice(start, nextEdgeIndex, edgeFieldsCount, (edgeStart, edgeEnd) => {
         // remove the edge
         for (let i = edgeStart; i < edgeEnd; i++) {
+            if (i >= edges.length) {
+                throw new Error(`Edge index ${i} is out of bounds!`);
+            }
             edges[i] = null as unknown as number;
         }
         // adjust the edge count
@@ -171,10 +176,6 @@ function getNodeName(wrapper: Snapshot, nodeIndex: number): string | null {
     return strings[nodes[nodeIndex + wrapper.nodeOffsets.name]];
   }
 
-function getField(nodes: number[], offset: number, index: number): number {
-    return nodes[offset + index];
-}
-
 /**
  * Allows us to iterate a large array in chunks
  * of a predefined size without allocating a new
@@ -193,12 +194,15 @@ function iterateBySlice(
 
 async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     const writer = outputFile.writer();
+
+    const nodeFieldsLength = data.snapshot.meta.node_fields.length;
+    const edgeFieldsLength = data.snapshot.meta.edge_fields.length;
     
     // write the header
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot header`));
     let content = JSON.stringify(data.snapshot);
     data.snapshot = null as unknown as any;
-    writer.write(`{\n"snapshot": ${content}\n`);
+    writer.write(`{\n"snapshot":${content}\n`);
     writer.flush();
     content = ''; // free up memory
     Bun.gc(true);
@@ -207,35 +211,39 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
 
     // write the nodes
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot nodes`));
-    content = JSON.stringify(data.nodes);
-    data.nodes = null as unknown as any;
-    writer.write(`,"nodes": ${content}\n`);
+    writer.write(`,"nodes":[`);
+    for (let i = 0; i < data.nodes.length; i++) {
+        writer.write(
+            i === 0 ? String(data.nodes[i]) :
+            (i + 1) % nodeFieldsLength === 0 ? `,${data.nodes[i]}\n`
+            : `,${data.nodes[i]}`
+        );
+    }
+    writer.write(`]\n`);
     writer.flush();
-    content = ''; // free up memory
+    data.nodes = null as unknown as any;
     Bun.gc(true);
     logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot nodes`));
     logMemory();
 
     // write the edges
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot edges`));
-    content = JSON.stringify(data.edges);
-    data.edges = null as unknown as any;
-    writer.write(`,"edges": ${content}\n`);
+    writer.write(`,"edges":[`);
+    for (let i = 0; i < data.edges.length; i++) {
+        if (data.edges[i] === null) {
+            continue;
+        }
+        writer.write(
+            i === 0 ? String(data.edges[i]) :
+            (i + 1) % edgeFieldsLength === 0 ? `,${data.edges[i]}\n`
+            : `,${data.edges[i]}`
+        );
+    }
+    writer.write(`]\n`);
     writer.flush();
-    content = ''; // free up memory
+    data.edges = null as unknown as any;
     Bun.gc(true);
     logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot edges`));
-    logMemory();
-
-    // write the strings
-    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot strings`));
-    content = JSON.stringify(data.strings);
-    data.strings = null as unknown as any;
-    writer.write(`,"strings": ${content}\n`);
-    writer.flush();
-    content = ''; // free up memory
-    Bun.gc(true);
-    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot strings`));
     logMemory();
 
     // write everything else
@@ -254,6 +262,27 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot Infos`));
     logMemory();
 
+    // write the strings
+    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot strings`));
+    writer.write(`,"strings":[`);
+    
+    if (data.strings.length) {
+        content = data.strings.shift()!;
+        writer.write(`${JSON.stringify(content)}\n`);
+    }
+
+    while (data.strings.length) {
+        content = data.strings.shift()!;
+        writer.write(`,${JSON.stringify(content)}\n`);
+    }
+    writer.write(`]\n`);
+    writer.flush();
+    data.strings = null as unknown as any;
+    content = ''; // free up memory
+    Bun.gc(true);
+    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot strings`));
+    logMemory();
+
     // close the file
     writer.write('}\n');
     writer.end();
@@ -263,8 +292,6 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     // we're done!
     console.log(chalk.magenta(`\n\t✨ Sparkling Clean\n\n`));
 }
-
-
 
 async function main() {
     const inputFilePath = Bun.argv[2];
