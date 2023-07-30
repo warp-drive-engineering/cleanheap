@@ -1,12 +1,48 @@
 import chalk from 'chalk';
 import pkg from '../package.json';
+import { heapStats } from "bun:jsc";
 import { HeapSnapshot } from './-types';
+import type { BunFile } from 'bun';
+import { log } from 'console';
 
-function logCompletion(str: string) {
+function formatBytes(bytes: number) {
+    if (bytes < 1024) {
+        return `${bytes}B`;
+    } else if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(2)}KB`;
+    } else if (bytes < 1024 * 1024 * 1024) {
+        return `${(bytes / 1024 / 1024).toFixed(2)}MB`;
+    } else {
+        return `${(bytes / 1024 / 1024 / 1024).toFixed(2)}GB`;
+    }
+}
+
+function logMemory() {
+    const {
+        heapSize,
+        heapCapacity,
+        extraMemorySize,
+        objectCount
+    } = heapStats();
+
+    console.log(chalk.grey(`\t${chalk.white('·')}\t\tMemory: ${chalk.cyan(formatBytes(heapSize))} / ${chalk.cyan(formatBytes(heapCapacity))} (${chalk.cyan(formatBytes(extraMemorySize))} extra) - ${chalk.cyan(objectCount)} objects`));
+}
+
+function clearLine() {
     // @ts-expect-error not typed properly
     process.stdout.clearLine(0);
     // @ts-expect-error not typed properly
     process.stdout.cursorTo(0);
+}
+
+function logUpdate(str: string) {
+    clearLine();
+
+    process.stdout.write(str);
+}
+
+function logCompletion(str: string) {
+    clearLine();
 
     console.log(str);
 }
@@ -33,7 +69,7 @@ async function getOutputFile(filePath: string) {
     const exists = await fileHandle.exists();
 
     if (exists) {
-        console.log(chalk.yellow(`\t⚠️  Overwritting existing file ${chalk.white(filePath)}!\n`));
+        console.log(chalk.yellow(`\t⚠️  Overwriting existing file ${chalk.white(filePath)}!\n`));
     }
 
     return fileHandle;
@@ -157,9 +193,81 @@ function iterateBySlice(
     callback: (start: number, end: number) => void,
 ) {
     for (let i = start; i < end; i += sliceSize) {
-      callback(i, i + sliceSize);
+        callback(i, i + sliceSize);
     }
-  }
+}
+
+async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
+    const writer = outputFile.writer();
+    
+    // write the header
+    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot header`));
+    let content = JSON.stringify(data.snapshot);
+    data.snapshot = null as unknown as any;
+    writer.write(`{ "meta": ${content},`);
+    writer.flush();
+    content = ''; // free up memory
+    Bun.gc(true);
+    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot Headers`));
+    logMemory();
+
+    // write the nodes
+    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot nodes`));
+    content = JSON.stringify(data.nodes);
+    data.nodes = null as unknown as any;
+    writer.write(`"nodes": ${content},`);
+    writer.flush();
+    content = ''; // free up memory
+    Bun.gc(true);
+    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot nodes`));
+    logMemory();
+
+    // write the edges
+    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot edges`));
+    content = JSON.stringify(data.edges);
+    data.edges = null as unknown as any;
+    writer.write(`"edges": ${content}}`);
+    writer.flush();
+    content = ''; // free up memory
+    Bun.gc(true);
+    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot edges`));
+    logMemory();
+
+    // write the strings
+    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot strings`));
+    content = JSON.stringify(data.strings);
+    data.strings = null as unknown as any;
+    writer.write(`"strings": ${content}}`);
+    writer.flush();
+    content = ''; // free up memory
+    Bun.gc(true);
+    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot strings`));
+    logMemory();
+
+    // write everything else
+    process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot Infos`));
+    for (const key in data) {
+        if (key === 'snapshot' || key === 'nodes' || key === 'edges' || key === 'strings') {
+            continue;
+        }
+        content = JSON.stringify(data[key]);
+        data[key] = null as unknown as any;
+        writer.write(`"${key}": ${content},`);
+        writer.flush();
+        content = ''; // free up memory
+        Bun.gc(true);
+    }
+    logCompletion(chalk.grey(`\t${chalk.white('·')}\t\t${chalk.green('▶')} Snapshot Infos`));
+    logMemory();
+
+    // close the file
+    writer.end();
+    console.log(chalk.grey(`\t${chalk.white('·')}\t${chalk.green('▶')} Snapshot written`));
+    logMemory();
+
+    // we're done!
+    console.log(chalk.magenta(`\n\t✨ Sparkling Clean\n\n`));
+}
 
 
 
@@ -176,27 +284,26 @@ async function main() {
 
     const writeHandler = await getOutputFile(outputFilePath);
     const data = await getInput(inputFilePath);
+    logMemory();
 
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t🔸 ...parsing Snapshot`));
     const snapshot = new Snapshot(data);
     logCompletion(chalk.grey(`\t${chalk.white('·')}\t${chalk.green('▶')} Snapshot parsed`));
+    logMemory();
 
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t🔸 ...cleaning Snapshot`));
     const isDirty = snapshot.clean();
 
     if (!isDirty) {
         logCompletion(chalk.grey(`\t${chalk.white('·')}\t${chalk.green('▶')} Snapshot Was Already Clean`));
+        console.log(chalk.magenta(`\n\t✨ Sparkling Clean\n\n`));
     } else {
         logCompletion(chalk.grey(`\t${chalk.white('·')}\t${chalk.green('▶')} Snapshot cleaned`));
+        logMemory();
 
-        process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t🔸 ...writing Snapshot`));
-        await Bun.write(writeHandler, JSON.stringify(snapshot.data));
-        logCompletion(chalk.grey(`\t${chalk.white('·')}\t${chalk.green('▶')} Snapshot written`));
+        return await writeOutput(writeHandler, snapshot.data);
     }
 
-    
-
-    console.log(chalk.magenta(`\n\t✨ Sparkling Clean\n\n`));
 }
 
 await main();

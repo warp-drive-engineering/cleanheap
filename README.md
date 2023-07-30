@@ -4,6 +4,8 @@ This project cleans weak retainer paths from heap snapshots of even the largest 
 
 ✨ Leaving Your Memory Leak Debugging
 
+![Demo of CLI Tool](demo.png)
+
 ## Usage
 
 To use:
