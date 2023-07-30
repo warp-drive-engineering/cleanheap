@@ -35,12 +35,6 @@ function clearLine() {
     process.stdout.cursorTo(0);
 }
 
-function logUpdate(str: string) {
-    clearLine();
-
-    process.stdout.write(str);
-}
-
 function logCompletion(str: string) {
     clearLine();
 
@@ -204,7 +198,7 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot header`));
     let content = JSON.stringify(data.snapshot);
     data.snapshot = null as unknown as any;
-    writer.write(`{ "meta": ${content},`);
+    writer.write(`{\n"snapshot": ${content}\n`);
     writer.flush();
     content = ''; // free up memory
     Bun.gc(true);
@@ -215,7 +209,7 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot nodes`));
     content = JSON.stringify(data.nodes);
     data.nodes = null as unknown as any;
-    writer.write(`"nodes": ${content},`);
+    writer.write(`,"nodes": ${content}\n`);
     writer.flush();
     content = ''; // free up memory
     Bun.gc(true);
@@ -226,7 +220,7 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot edges`));
     content = JSON.stringify(data.edges);
     data.edges = null as unknown as any;
-    writer.write(`"edges": ${content}}`);
+    writer.write(`,"edges": ${content}\n`);
     writer.flush();
     content = ''; // free up memory
     Bun.gc(true);
@@ -237,7 +231,7 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot strings`));
     content = JSON.stringify(data.strings);
     data.strings = null as unknown as any;
-    writer.write(`"strings": ${content}}`);
+    writer.write(`,"strings": ${content}\n`);
     writer.flush();
     content = ''; // free up memory
     Bun.gc(true);
@@ -247,12 +241,12 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     // write everything else
     process.stdout.write(chalk.grey(`\t${chalk.white('·')}\t\t🔸 ...writing Snapshot Infos`));
     for (const key in data) {
-        if (key === 'snapshot' || key === 'nodes' || key === 'edges' || key === 'strings') {
+        if (!Object.prototype.hasOwnProperty.call(data, key) || key === 'snapshot' || key === 'nodes' || key === 'edges' || key === 'strings') {
             continue;
         }
         content = JSON.stringify(data[key]);
         data[key] = null as unknown as any;
-        writer.write(`"${key}": ${content},`);
+        writer.write(`,"${key}": ${content}\n`);
         writer.flush();
         content = ''; // free up memory
         Bun.gc(true);
@@ -261,6 +255,7 @@ async function writeOutput(outputFile: BunFile, data: HeapSnapshot) {
     logMemory();
 
     // close the file
+    writer.write('}\n');
     writer.end();
     console.log(chalk.grey(`\t${chalk.white('·')}\t${chalk.green('▶')} Snapshot written`));
     logMemory();
